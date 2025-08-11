@@ -27,7 +27,7 @@ const Profile = () => {
           return;
         }
 
-        const response = await fetch('http://localhost:5000/upload', {
+        const response = await fetch('https://bitecount-backend.onrender.com/upload', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -403,5 +403,6 @@ const Profile = () => {
     </>
   );
 };
+
 
 export default Profile;
