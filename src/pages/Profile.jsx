@@ -49,16 +49,16 @@ const Profile = () => {
 
         const responseData = await response.json();
         
-        
+        // Handle both old format (array) and new format (object with data property)
         if (Array.isArray(responseData)) {
-      
+          // Old format - direct array
           setNutritionData(responseData);
         } else if (responseData.data && Array.isArray(responseData.data)) {
-      
+          // New format - object with data property
           setNutritionData(responseData.data);
           setPagination(responseData.pagination);
         } else {
-          
+          // Fallback - ensure we always have an array
           console.warn('Unexpected response format:', responseData);
           setNutritionData([]);
         }
@@ -67,7 +67,7 @@ const Profile = () => {
       } catch (err) {
         console.error('Error fetching nutrition data:', err);
         setError(err.message || 'Failed to load your nutrition data');
-        setNutritionData([]); 
+        setNutritionData([]); // Ensure it's always an array
         setLoading(false);
       }
     };
@@ -112,7 +112,6 @@ const Profile = () => {
     }
   };
 
-  // extractKeyNutrients function
   const extractKeyNutrients = (message) => {
     if (!message || typeof message !== 'string') {
       return { calories: 'N/A', protein: 'N/A', carbs: 'N/A' };
@@ -122,40 +121,50 @@ const Profile = () => {
     const nutrients = { calories: 'N/A', protein: 'N/A', carbs: 'N/A' };
 
     lines.forEach(line => {
-      // Calories - 
-      if (/\b(calories?|kcal)\b/i.test(line) && !/calcium|local|medical|rical/i.test(line)) {
-        const calorieMatch = line.match(/(\d+(?:\.\d+)?)\s*(?:calories?|kcal)\b/i);
-        if (calorieMatch && nutrients.calories === 'N/A') {
-          nutrients.calories = `${calorieMatch[1]} kcal`;
+      const lowerLine = line.toLowerCase();
+      
+      if (nutrients.calories === 'N/A') {
+        let calorieMatch = line.match(/(\d+(?:\.\d+)?)\s*(?:calories?|kcal)\b/i);
+        if (!calorieMatch) {
+          calorieMatch = line.match(/(?:calories?|kcal)[:\s]+(\d+(?:\.\d+)?)/i);
         }
-      }
-      // Handle standalone "cal" more carefully
-      else if (/\b(\d+(?:\.\d+)?)\s*cal\b/i.test(line) && !/calcium|local|medical|rical|scale/i.test(line)) {
-        const calorieMatch = line.match(/(\d+(?:\.\d+)?)\s*cal\b/i);
-        if (calorieMatch && nutrients.calories === 'N/A') {
+        if (!calorieMatch) {
+          if (/\b(\d+(?:\.\d+)?)\s*cal\b/i.test(line) && !/calcium|local|medical|scale/i.test(line)) {
+            calorieMatch = line.match(/(\d+(?:\.\d+)?)\s*cal\b/i);
+          }
+        }
+        if (calorieMatch) {
           nutrients.calories = `${calorieMatch[1]} kcal`;
         }
       }
       
-      // Protein -
-      if (/\bprotein\b/i.test(line)) {
-        const proteinMatch = line.match(/(?:protein[:\s]*(\d+(?:\.\d+)?)\s*g?|(\d+(?:\.\d+)?)\s*g?\s*protein)/i);
-        if (proteinMatch && nutrients.protein === 'N/A') { 
-          const value = proteinMatch[1] || proteinMatch[2];
-          nutrients.protein = `${value}g`;
+      if (nutrients.protein === 'N/A' && /protein/i.test(line)) {
+        let proteinMatch = line.match(/(\d+(?:\.\d+)?)\s*g?\s*protein/i);
+        if (!proteinMatch) {
+          proteinMatch = line.match(/protein[:\s]+(\d+(?:\.\d+)?)/i);
+        }
+        if (!proteinMatch) {
+          proteinMatch = line.match(/protein\s+(\d+(?:\.\d+)?)/i);
+        }
+        if (proteinMatch) {
+          nutrients.protein = `${proteinMatch[1]}g`;
         }
       }
       
-      // Carbs - look for patterns like "45g carbs", "carbohydrates: 50g"
-      if (/\b(carb(?:ohydrate)?s?)\b/i.test(line)) {
-        const carbMatch = line.match(/(?:carb(?:ohydrate)?s?[:\s]*(\d+(?:\.\d+)?)\s*g?|(\d+(?:\.\d+)?)\s*g?\s*carb(?:ohydrate)?s?)/i);
-        if (carbMatch && nutrients.carbs === 'N/A') { 
-          const value = carbMatch[1] || carbMatch[2];
-          nutrients.carbs = `${value}g`;
+      if (nutrients.carbs === 'N/A' && /(carb|carbohydrate)/i.test(line)) {
+        let carbMatch = line.match(/(\d+(?:\.\d+)?)\s*g?\s*carb(?:ohydrate)?s?/i);
+        if (!carbMatch) {
+          carbMatch = line.match(/carb(?:ohydrate)?s?[:\s]+(\d+(?:\.\d+)?)/i);
+        }
+        if (!carbMatch) {
+          carbMatch = line.match(/carb(?:ohydrate)?s?\s+(\d+(?:\.\d+)?)/i);
+        }
+        if (carbMatch) {
+          nutrients.carbs = `${carbMatch[1]}g`;
         }
       }
     });
-
+    
     return nutrients;
   };
 
@@ -223,7 +232,6 @@ const Profile = () => {
     setExpandedItems(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // Safe calculation with array check and improved error handling
   const summaryStats = Array.isArray(nutritionData) ? nutritionData.reduce(
     (acc, item) => {
       const nutrients = extractKeyNutrients(item.message);
