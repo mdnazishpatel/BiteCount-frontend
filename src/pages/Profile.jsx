@@ -49,16 +49,16 @@ const Profile = () => {
 
         const responseData = await response.json();
         
-        // Handle both old format (array) and new format (object with data property)
+        
         if (Array.isArray(responseData)) {
-          // Old format - direct array
+      
           setNutritionData(responseData);
         } else if (responseData.data && Array.isArray(responseData.data)) {
-          // New format - object with data property
+      
           setNutritionData(responseData.data);
           setPagination(responseData.pagination);
         } else {
-          // Fallback - ensure we always have an array
+          
           console.warn('Unexpected response format:', responseData);
           setNutritionData([]);
         }
@@ -67,7 +67,7 @@ const Profile = () => {
       } catch (err) {
         console.error('Error fetching nutrition data:', err);
         setError(err.message || 'Failed to load your nutrition data');
-        setNutritionData([]); // Ensure it's always an array
+        setNutritionData([]); 
         setLoading(false);
       }
     };
@@ -112,22 +112,47 @@ const Profile = () => {
     }
   };
 
+  // extractKeyNutrients function
   const extractKeyNutrients = (message) => {
     if (!message || typeof message !== 'string') {
       return { calories: 'N/A', protein: 'N/A', carbs: 'N/A' };
     }
 
-    const lines = message.split('\n').map(line => line.trim().toLowerCase());
+    const lines = message.split('\n').map(line => line.trim());
     const nutrients = { calories: 'N/A', protein: 'N/A', carbs: 'N/A' };
 
     lines.forEach(line => {
-      const numberMatch = line.match(/(\d*\.?\d+)/);
-      if (line.includes('calorie') || line.includes('kcal') || line.includes('cal')) {
-        nutrients.calories = numberMatch ? `${numberMatch[0]} kcal` : 'N/A';
-      } else if (line.includes('protein')) {
-        nutrients.protein = numberMatch ? `${numberMatch[0]}g` : 'N/A';
-      } else if (line.includes('carb') || line.includes('carbohydrate')) {
-        nutrients.carbs = numberMatch ? `${numberMatch[0]}g` : 'N/A';
+      // Calories - 
+      if (/\b(calories?|kcal)\b/i.test(line) && !/calcium|local|medical|rical/i.test(line)) {
+        const calorieMatch = line.match(/(\d+(?:\.\d+)?)\s*(?:calories?|kcal)\b/i);
+        if (calorieMatch && nutrients.calories === 'N/A') {
+          nutrients.calories = `${calorieMatch[1]} kcal`;
+        }
+      }
+      // Handle standalone "cal" more carefully
+      else if (/\b(\d+(?:\.\d+)?)\s*cal\b/i.test(line) && !/calcium|local|medical|rical|scale/i.test(line)) {
+        const calorieMatch = line.match(/(\d+(?:\.\d+)?)\s*cal\b/i);
+        if (calorieMatch && nutrients.calories === 'N/A') {
+          nutrients.calories = `${calorieMatch[1]} kcal`;
+        }
+      }
+      
+      // Protein -
+      if (/\bprotein\b/i.test(line)) {
+        const proteinMatch = line.match(/(?:protein[:\s]*(\d+(?:\.\d+)?)\s*g?|(\d+(?:\.\d+)?)\s*g?\s*protein)/i);
+        if (proteinMatch && nutrients.protein === 'N/A') { 
+          const value = proteinMatch[1] || proteinMatch[2];
+          nutrients.protein = `${value}g`;
+        }
+      }
+      
+      // Carbs - look for patterns like "45g carbs", "carbohydrates: 50g"
+      if (/\b(carb(?:ohydrate)?s?)\b/i.test(line)) {
+        const carbMatch = line.match(/(?:carb(?:ohydrate)?s?[:\s]*(\d+(?:\.\d+)?)\s*g?|(\d+(?:\.\d+)?)\s*g?\s*carb(?:ohydrate)?s?)/i);
+        if (carbMatch && nutrients.carbs === 'N/A') { 
+          const value = carbMatch[1] || carbMatch[2];
+          nutrients.carbs = `${value}g`;
+        }
       }
     });
 
@@ -198,7 +223,7 @@ const Profile = () => {
     setExpandedItems(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // Safe calculation with array check
+  // Safe calculation with array check and improved error handling
   const summaryStats = Array.isArray(nutritionData) ? nutritionData.reduce(
     (acc, item) => {
       const nutrients = extractKeyNutrients(item.message);
@@ -208,7 +233,7 @@ const Profile = () => {
       }
       return {
         totalMeals: acc.totalMeals + 1,
-        totalCalories: acc.totalCalories + calories,
+        totalCalories: acc.totalCalories + (isNaN(calories) ? 0 : calories),
       };
     },
     { totalMeals: 0, totalCalories: 0 }
@@ -403,6 +428,5 @@ const Profile = () => {
     </>
   );
 };
-
 
 export default Profile;
