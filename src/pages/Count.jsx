@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera, Upload, Zap, Loader2, CheckCircle, XCircle, Info, RotateCcw, Trash2 } from 'lucide-react';
 import Header from './Header';
@@ -9,19 +9,16 @@ const CalorieCounter = () => {
   const [imagePreview, setImagePreview] = useState(null);
   const [nutritionData, setNutritionData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [cameraLoading, setCameraLoading] = useState(false); // ✅ Separate loading state for camera
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
   const [isCamera, setIsCamera] = useState(false);
   const [stream, setStream] = useState(null);
-  const isSubmitting = useRef(false); // ✅ Guard against double submissions
-
   const navigate = useNavigate();
+
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // ✅ Cleanup camera stream on unmount
   useEffect(() => {
     return () => {
       if (stream) {
@@ -67,20 +64,10 @@ const CalorieCounter = () => {
     }
   };
 
-  // ✅ stopCamera is now a useCallback so it can be safely called anywhere
-  const stopCamera = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
-    }
-    setIsCamera(false);
-  }, [stream]);
-
-  // ✅ startCamera properly awaits and uses setCameraLoading (not setLoading)
   const startCamera = async () => {
     try {
       setError(null);
-      setCameraLoading(true);
+      setLoading(true);
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Camera access is not supported in this browser');
@@ -98,9 +85,8 @@ const CalorieCounter = () => {
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
       setIsCamera(true);
-      setCameraLoading(false);
+      setLoading(false);
 
-      // ✅ Attach stream to video element after state update
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
@@ -113,7 +99,7 @@ const CalorieCounter = () => {
         }
       }, 100);
     } catch (err) {
-      setCameraLoading(false);
+      setLoading(false);
       setError(
         err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError'
           ? 'Please allow camera permissions and try again.'
@@ -122,6 +108,14 @@ const CalorieCounter = () => {
           : 'Unable to access camera. Please check permissions or try uploading a file.'
       );
     }
+  };
+
+  const stopCamera = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
+    setIsCamera(false);
   };
 
   const capturePhoto = () => {
@@ -169,15 +163,13 @@ const CalorieCounter = () => {
     stopCamera();
   };
 
-  // ✅ Fixed: stop first, then await startCamera properly
-  const handleRetakePhoto = async () => {
+  const handleRetakePhoto = () => {
     setImage(null);
     setImagePreview(null);
     setNutritionData(null);
     setError(null);
     setSuccess(false);
-    stopCamera();
-    await startCamera(); // ✅ properly awaited now
+    startCamera();
   };
 
   const handleSubmit = async () => {
@@ -186,17 +178,8 @@ const CalorieCounter = () => {
       return;
     }
 
-    // ✅ Guard against double submissions
-    if (isSubmitting.current) return;
-    isSubmitting.current = true;
-
     setLoading(true);
     setError(null);
-    setSuccess(false);
-
-    // ✅ Timeout controller - abort after 50 seconds
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 50000);
 
     try {
       const token = localStorage.getItem('authToken');
@@ -204,7 +187,6 @@ const CalorieCounter = () => {
         setError('You must be logged in to analyze images');
         setTimeout(() => navigate('/login'), 2000);
         setLoading(false);
-        isSubmitting.current = false;
         return;
       }
 
@@ -215,10 +197,7 @@ const CalorieCounter = () => {
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({ image }),
-        signal: controller.signal, // ✅ attach abort signal
       });
-
-      clearTimeout(timeoutId);
 
       const data = await response.json();
 
@@ -228,7 +207,6 @@ const CalorieCounter = () => {
         setError('Session expired. Please log in again.');
         setTimeout(() => navigate('/login'), 2000);
         setLoading(false);
-        isSubmitting.current = false;
         return;
       }
 
@@ -243,33 +221,20 @@ const CalorieCounter = () => {
         setError(data.message || `Server error: ${response.status}`);
       }
     } catch (err) {
-      clearTimeout(timeoutId);
-
-      // ✅ Handle abort/timeout separately
-      if (err.name === 'AbortError') {
-        setError('Request timed out. The server is taking too long. Please try again.');
-      } else {
-        setError('Network error. Please check your connection and try again.');
-      }
+      setError('Network error. Please check your connection and try again.');
     } finally {
       setLoading(false);
-      isSubmitting.current = false;
     }
   };
 
-  // ✅ Improved parser: handles bullet points (-, *) and numbered lists
   const parseNutritionData = (data) => {
     if (!data) return null;
 
     const lines = data.split('\n').filter(line => line.trim() !== '');
-
     return lines.map(line => {
       let cleanLine = line.trim();
-
-      // Replace **bold** markdown
       cleanLine = cleanLine.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-      // ✅ Handle markdown headers
       if (cleanLine.startsWith('#')) {
         const headerLevel = cleanLine.match(/^#+/)[0].length;
         const headerText = cleanLine.replace(/^#+\s*/, '');
@@ -277,60 +242,28 @@ const CalorieCounter = () => {
           type: 'header',
           level: headerLevel,
           content: headerText,
+          original: line,
         };
       }
 
-      // ✅ Handle bullet points (- or * at start)
-      if (/^[-*]\s+/.test(cleanLine)) {
-        const bulletText = cleanLine.replace(/^[-*]\s+/, '');
-        return {
-          type: 'bullet',
-          content: bulletText,
-          category: getCategoryFromLine(bulletText.toLowerCase()),
-        };
-      }
-
-      // ✅ Handle numbered lists
-      if (/^\d+\.\s+/.test(cleanLine)) {
-        const listText = cleanLine.replace(/^\d+\.\s+/, '');
-        return {
-          type: 'numbered',
-          content: listText,
-          category: getCategoryFromLine(listText.toLowerCase()),
-        };
-      }
+      const lowerLine = cleanLine.toLowerCase();
+      let category = 'normal';
+      if (lowerLine.includes('calorie') || lowerLine.includes('kcal')) category = 'calories';
+      else if (lowerLine.includes('protein')) category = 'protein';
+      else if (lowerLine.includes('carb') || lowerLine.includes('carbohydrate')) category = 'carbs';
+      else if (lowerLine.includes('fat') || lowerLine.includes('lipid')) category = 'fat';
+      else if (lowerLine.includes('fiber') || lowerLine.includes('fibre')) category = 'fiber';
+      else if (lowerLine.includes('sugar')) category = 'sugar';
+      else if (lowerLine.includes('sodium') || lowerLine.includes('salt')) category = 'sodium';
+      else if (lowerLine.includes('vitamin') || lowerLine.includes('mineral')) category = 'vitamin';
 
       return {
         type: 'text',
-        category: getCategoryFromLine(cleanLine.toLowerCase()),
+        category: category,
         content: cleanLine,
+        original: line,
       };
     });
-  };
-
-  // ✅ Extracted category logic into its own helper
-  const getCategoryFromLine = (lowerLine) => {
-    if (lowerLine.includes('calorie') || lowerLine.includes('kcal')) return 'calories';
-    if (lowerLine.includes('protein')) return 'protein';
-    if (lowerLine.includes('carb') || lowerLine.includes('carbohydrate')) return 'carbs';
-    if (lowerLine.includes('fat') || lowerLine.includes('lipid')) return 'fat';
-    if (lowerLine.includes('fiber') || lowerLine.includes('fibre')) return 'fiber';
-    if (lowerLine.includes('sugar')) return 'sugar';
-    if (lowerLine.includes('sodium') || lowerLine.includes('salt')) return 'sodium';
-    if (lowerLine.includes('vitamin') || lowerLine.includes('mineral')) return 'vitamin';
-    return 'normal';
-  };
-
-  const categoryStyles = {
-    calories: 'bg-red-900/30 border-red-500/30 text-red-200',
-    protein: 'bg-blue-900/30 border-blue-500/30 text-blue-200',
-    carbs: 'bg-yellow-900/30 border-yellow-500/30 text-yellow-200',
-    fat: 'bg-purple-900/30 border-purple-500/30 text-purple-200',
-    fiber: 'bg-green-900/30 border-green-500/30 text-green-200',
-    sugar: 'bg-orange-900/30 border-orange-500/30 text-orange-200',
-    sodium: 'bg-pink-900/30 border-pink-500/30 text-pink-200',
-    vitamin: 'bg-teal-900/30 border-teal-500/30 text-teal-200',
-    normal: 'bg-slate-700/30 border-slate-500/30 text-gray-300',
   };
 
   const renderNutritionItem = (item, index) => {
@@ -345,28 +278,20 @@ const CalorieCounter = () => {
       );
     }
 
-    // ✅ Render bullet points with a dot indicator
-    if (item.type === 'bullet') {
-      const style = categoryStyles[item.category] || categoryStyles.normal;
-      return (
-        <div key={index} className={`border rounded-lg p-3 mb-2 flex items-start space-x-2 ${style}`}>
-          <span className="mt-1 text-current opacity-60 flex-shrink-0">•</span>
-          <p className="font-medium leading-relaxed" dangerouslySetInnerHTML={{ __html: item.content }} />
-        </div>
-      );
-    }
-
-    // ✅ Render numbered list items
-    if (item.type === 'numbered') {
-      const style = categoryStyles[item.category] || categoryStyles.normal;
-      return (
-        <div key={index} className={`border rounded-lg p-3 mb-2 ${style}`}>
-          <p className="font-medium leading-relaxed" dangerouslySetInnerHTML={{ __html: item.content }} />
-        </div>
-      );
-    }
+    const categoryStyles = {
+      calories: 'bg-red-900/30 border-red-500/30 text-red-200',
+      protein: 'bg-blue-900/30 border-blue-500/30 text-blue-200',
+      carbs: 'bg-yellow-900/30 border-yellow-500/30 text-yellow-200',
+      fat: 'bg-purple-900/30 border-purple-500/30 text-purple-200',
+      fiber: 'bg-green-900/30 border-green-500/30 text-green-200',
+      sugar: 'bg-orange-900/30 border-orange-500/30 text-orange-200',
+      sodium: 'bg-pink-900/30 border-pink-500/30 text-pink-200',
+      vitamin: 'bg-teal-900/30 border-teal-500/30 text-teal-200',
+      normal: 'bg-slate-700/30 border-slate-500/30 text-gray-300',
+    };
 
     const style = categoryStyles[item.category] || categoryStyles.normal;
+
     return (
       <div key={index} className={`border rounded-lg p-3 mb-2 ${style}`}>
         <p className="font-medium leading-relaxed" dangerouslySetInnerHTML={{ __html: item.content }} />
@@ -395,7 +320,6 @@ const CalorieCounter = () => {
           </div>
 
           <div className="grid lg:grid-cols-2 gap-8">
-            {/* LEFT COLUMN */}
             <div className="space-y-6">
               <div className="bg-slate-800 border-2 border-dashed border-slate-600 rounded-2xl overflow-hidden hover:border-red-500/50 transition-colors duration-300">
                 {isCamera ? (
@@ -428,9 +352,7 @@ const CalorieCounter = () => {
                         <XCircle className="h-6 w-6 text-white" />
                       </button>
                     </div>
-
-                    {/* ✅ Uses cameraLoading, not loading */}
-                    {cameraLoading && (
+                    {loading && (
                       <div className="absolute inset-0 bg-slate-900/80 flex items-center justify-center">
                         <div className="text-center">
                           <Loader2 className="h-8 w-8 text-red-400 animate-spin mx-auto mb-2" />
@@ -475,15 +397,7 @@ const CalorieCounter = () => {
                 )}
               </div>
 
-              {/* Camera loading outside the box */}
-              {!imagePreview && !isCamera && cameraLoading && (
-                <div className="flex items-center justify-center space-x-3 py-2">
-                  <Loader2 className="h-5 w-5 text-red-400 animate-spin" />
-                  <p className="text-gray-400 text-sm">Starting camera...</p>
-                </div>
-              )}
-
-              {!imagePreview && !isCamera && !cameraLoading && (
+              {!imagePreview && !isCamera && (
                 <div className="grid grid-cols-2 gap-4">
                   <button
                     onClick={startCamera}
@@ -502,7 +416,7 @@ const CalorieCounter = () => {
                 </div>
               )}
 
-              {isCamera && !cameraLoading && (
+              {isCamera && !loading && (
                 <div className="bg-blue-900/50 border border-blue-500/50 rounded-xl p-4">
                   <div className="flex items-center space-x-3 text-blue-200">
                     <Info className="h-5 w-5" />
@@ -517,8 +431,7 @@ const CalorieCounter = () => {
                 <div className="grid grid-cols-3 gap-3">
                   <button
                     onClick={handleRetakePhoto}
-                    disabled={cameraLoading}
-                    className="group bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-3 rounded-lg font-medium transition-all duration-300 hover:scale-105 flex items-center justify-center space-x-2"
+                    className="group bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-lg font-medium transition-all duration-300 hover:scale-105 flex items-center justify-center space-x-2"
                   >
                     <RotateCcw className="h-4 w-4 group-hover:rotate-180 transition-transform duration-500" />
                     <span>Retake</span>
@@ -569,7 +482,6 @@ const CalorieCounter = () => {
               />
             </div>
 
-            {/* RIGHT COLUMN */}
             <div className="space-y-6">
               {error && (
                 <div className="bg-red-900/50 border border-red-500/50 rounded-xl p-4 flex items-center space-x-3">
@@ -591,7 +503,6 @@ const CalorieCounter = () => {
                     <Loader2 className="h-12 w-12 text-red-400 animate-spin" />
                     <h3 className="text-xl font-semibold text-white">Analyzing Your Meal</h3>
                     <p className="text-gray-400 text-center">Our AI is examining the nutritional content...</p>
-                    <p className="text-gray-500 text-sm text-center">This may take up to 30 seconds</p>
                   </div>
                 </div>
               )}
@@ -606,9 +517,7 @@ const CalorieCounter = () => {
                   </div>
                   <div className="p-6 max-h-96 overflow-y-auto custom-scrollbar">
                     <div className="prose prose-invert max-w-none">
-                      {parseNutritionData(nutritionData)?.map((item, index) =>
-                        renderNutritionItem(item, index)
-                      )}
+                      {parseNutritionData(nutritionData)?.map((item, index) => renderNutritionItem(item, index))}
                     </div>
                   </div>
                 </div>
