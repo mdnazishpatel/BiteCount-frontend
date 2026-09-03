@@ -231,13 +231,11 @@ const CalorieCounter = () => {
   // Nutrition report parsing
   //
   // Gemini's response is loosely-structured markdown: "---" section
-  // dividers, "<strong>Section Title</strong>" or "### Section Title"
-  // headers, numbered/bulleted lists (some with an italicized "*Label:*"
-  // or bare "*Label*" sub-item prefix), pipe-delimited markdown tables,
-  // and a closing "Verdict:" line. This turns that into typed blocks so
-  // we can render each piece with layout that matches its role, instead
-  // of treating every line as an identical colored strip or leaking raw
-  // markdown syntax onto the page.
+  // dividers, "<strong>Section Title</strong>" headers, numbered/bulleted
+  // lists (some with an italicized "*Label:*" sub-item prefix), and a
+  // closing "Verdict:" line. This turns that into typed blocks so we can
+  // render each piece with layout that matches its role, instead of
+  // treating every line as an identical colored strip.
   // ---------------------------------------------------------------------
 
   const CATEGORY_STYLES = {
@@ -267,35 +265,22 @@ const CalorieCounter = () => {
 
   // Convert **bold** / *italic* markdown that survives inside a line
   // (Gemini mixes literal <strong> tags with markdown asterisks) into HTML.
-  // Single-asterisk spans are treated as bold labels (not italics) since
-  // that's how the model uses them (e.g. "*Main Component*").
   const inlineFormat = (text) =>
     text
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<span class="text-gray-100 font-semibold not-italic">$1</span>');
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
 
   const parseNutritionReport = (raw) => {
     if (!raw) return [];
     const lines = raw.split('\n');
     const blocks = [];
     let currentList = null;
-    let currentTable = null;
 
     const flushList = () => {
       if (currentList) {
         blocks.push(currentList);
         currentList = null;
       }
-    };
-    const flushTable = () => {
-      if (currentTable) {
-        blocks.push(currentTable);
-        currentTable = null;
-      }
-    };
-    const flushAll = () => {
-      flushList();
-      flushTable();
     };
 
     lines.forEach((rawLine) => {
@@ -304,38 +289,22 @@ const CalorieCounter = () => {
 
       // Section divider
       if (/^-{3,}$/.test(line)) {
-        flushAll();
+        flushList();
         blocks.push({ type: 'divider' });
         return;
       }
 
-      // Markdown table row: "| Nutrient | Estimated Amount |"
-      const tableMatch = line.match(/^\|(.+)\|$/);
-      if (tableMatch) {
+      // Section header: a line that is ONLY a <strong> tag
+      const headerMatch = line.match(/^<strong>(.+)<\/strong>$/);
+      if (headerMatch) {
         flushList();
-        const cells = tableMatch[1].split('|').map((c) => c.trim());
-        const isSeparator = cells.every((c) => /^:?-{2,}:?$/.test(c));
-        if (isSeparator) return; // skip the |:---|:---| divider row
-        if (!currentTable) {
-          currentTable = { type: 'table', header: cells, rows: [] };
-        } else {
-          currentTable.rows.push(cells);
-        }
-        return;
-      }
-
-      // Section header: "<strong>Title</strong>" OR markdown "### Title"
-      const strongHeaderMatch = line.match(/^<strong>(.+)<\/strong>$/);
-      const mdHeaderMatch = line.match(/^#{1,6}\s+(.+?)\s*#*$/);
-      if (strongHeaderMatch || mdHeaderMatch) {
-        flushAll();
-        blocks.push({ type: 'header', content: (strongHeaderMatch || mdHeaderMatch)[1] });
+        blocks.push({ type: 'header', content: headerMatch[1] });
         return;
       }
 
       // Verdict callout
       if (/^\**Verdict:?\**/i.test(line)) {
-        flushAll();
+        flushList();
         blocks.push({ type: 'verdict', content: line.replace(/^\**Verdict:?\**\s*/i, '') });
         return;
       }
@@ -343,24 +312,21 @@ const CalorieCounter = () => {
       // Italic disclaimer/note line, e.g. "*Note: values are approximate*"
       const noteMatch = line.match(/^\*(Note:.*)\*$/i);
       if (noteMatch) {
-        flushAll();
+        flushList();
         blocks.push({ type: 'note', content: noteMatch[1] });
         return;
       }
 
-      // Numbered ("1. Label: rest"), bulleted ("* Label: rest" / "- Label: rest") list items
+      // Numbered ("1. Label: rest") or bulleted ("* Label: rest") list items
       const numberedMatch = line.match(/^\d+\.\s+(.*)$/);
-      const bulletMatch = line.match(/^[*-]\s+(.*)$/);
+      const bulletMatch = line.match(/^\*\s+(.*)$/);
       if (numberedMatch || bulletMatch) {
-        flushTable();
         const itemRaw = (numberedMatch || bulletMatch)[1];
 
         // Sub-item form: "*Label:* rest" (used for fiber/sugar/sat-fat rows)
         const subLabelMatch = itemRaw.match(/^\*(.+?):\*\s*(.*)$/);
         // Plain form: "Label: rest" or "**Label:** rest"
         const plainLabelMatch = itemRaw.match(/^\*{0,2}(.+?):\*{0,2}\s*(.*)$/);
-        // Bare bold label with no colon: "*Main Component* 3 whole finfish..."
-        const boldNoColonMatch = itemRaw.match(/^\*{1,2}(.+?)\*{1,2}\s+(.+)$/);
 
         let label = null;
         let value = itemRaw;
@@ -373,10 +339,6 @@ const CalorieCounter = () => {
         } else if (plainLabelMatch && plainLabelMatch[2]) {
           label = plainLabelMatch[1];
           value = plainLabelMatch[2];
-        } else if (boldNoColonMatch) {
-          label = boldNoColonMatch[1];
-          value = boldNoColonMatch[2];
-          sub = true;
         }
 
         const item = { label, value, raw: itemRaw, sub };
@@ -386,11 +348,11 @@ const CalorieCounter = () => {
       }
 
       // Plain paragraph (e.g. the intro sentence before the first divider)
-      flushAll();
+      flushList();
       blocks.push({ type: 'paragraph', content: line });
     });
 
-    flushAll();
+    flushList();
     return blocks;
   };
 
@@ -440,45 +402,6 @@ const CalorieCounter = () => {
                 dangerouslySetInnerHTML={{ __html: inlineFormat(block.content) }}
               />
             </div>
-          </div>
-        );
-
-      case 'table':
-        return (
-          <div key={index} className="overflow-x-auto mb-4 rounded-lg border border-slate-600">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-700/60">
-                  {block.header.map((h, i) => (
-                    <th
-                      key={i}
-                      className="text-left font-semibold text-gray-200 px-3 py-2 border-b border-slate-600"
-                      dangerouslySetInnerHTML={{ __html: inlineFormat(h) }}
-                    />
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {block.rows.map((row, ri) => (
-                  <tr
-                    key={ri}
-                    className={`border-b border-slate-700 last:border-0 ${
-                      ri % 2 === 0 ? 'bg-slate-800/40' : 'bg-slate-800/10'
-                    }`}
-                  >
-                    {row.map((cell, ci) => (
-                      <td
-                        key={ci}
-                        className={`px-3 py-2 ${
-                          ci === 0 ? 'font-medium text-gray-200 whitespace-nowrap' : 'text-gray-300'
-                        }`}
-                        dangerouslySetInnerHTML={{ __html: inlineFormat(cell) }}
-                      />
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         );
 
