@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, Upload, Zap, Loader2, CheckCircle, XCircle, Info, RotateCcw, Trash2 } from 'lucide-react';
+import { Camera, Upload, Zap, Loader2, CheckCircle, XCircle, Info, RotateCcw, Trash2, Award, Utensils } from 'lucide-react';
 import Header from './Header';
 import Footer from './Footer';
 
@@ -227,76 +227,225 @@ const CalorieCounter = () => {
     }
   };
 
-  const parseNutritionData = (data) => {
-    if (!data) return null;
+  // ---------------------------------------------------------------------
+  // Nutrition report parsing
+  //
+  // Gemini's response is loosely-structured markdown: "---" section
+  // dividers, "<strong>Section Title</strong>" headers, numbered/bulleted
+  // lists (some with an italicized "*Label:*" sub-item prefix), and a
+  // closing "Verdict:" line. This turns that into typed blocks so we can
+  // render each piece with layout that matches its role, instead of
+  // treating every line as an identical colored strip.
+  // ---------------------------------------------------------------------
 
-    const lines = data.split('\n').filter(line => line.trim() !== '');
-    return lines.map(line => {
-      let cleanLine = line.trim();
-      cleanLine = cleanLine.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-
-      if (cleanLine.startsWith('#')) {
-        const headerLevel = cleanLine.match(/^#+/)[0].length;
-        const headerText = cleanLine.replace(/^#+\s*/, '');
-        return {
-          type: 'header',
-          level: headerLevel,
-          content: headerText,
-          original: line,
-        };
-      }
-
-      const lowerLine = cleanLine.toLowerCase();
-      let category = 'normal';
-      if (lowerLine.includes('calorie') || lowerLine.includes('kcal')) category = 'calories';
-      else if (lowerLine.includes('protein')) category = 'protein';
-      else if (lowerLine.includes('carb') || lowerLine.includes('carbohydrate')) category = 'carbs';
-      else if (lowerLine.includes('fat') || lowerLine.includes('lipid')) category = 'fat';
-      else if (lowerLine.includes('fiber') || lowerLine.includes('fibre')) category = 'fiber';
-      else if (lowerLine.includes('sugar')) category = 'sugar';
-      else if (lowerLine.includes('sodium') || lowerLine.includes('salt')) category = 'sodium';
-      else if (lowerLine.includes('vitamin') || lowerLine.includes('mineral')) category = 'vitamin';
-
-      return {
-        type: 'text',
-        category: category,
-        content: cleanLine,
-        original: line,
-      };
-    });
+  const CATEGORY_STYLES = {
+    calories: 'bg-red-900/30 border-red-500/30 text-red-200',
+    protein: 'bg-blue-900/30 border-blue-500/30 text-blue-200',
+    carbs: 'bg-yellow-900/30 border-yellow-500/30 text-yellow-200',
+    fat: 'bg-purple-900/30 border-purple-500/30 text-purple-200',
+    fiber: 'bg-green-900/30 border-green-500/30 text-green-200',
+    sugar: 'bg-orange-900/30 border-orange-500/30 text-orange-200',
+    sodium: 'bg-pink-900/30 border-pink-500/30 text-pink-200',
+    vitamin: 'bg-teal-900/30 border-teal-500/30 text-teal-200',
+    normal: 'bg-slate-700/40 border-slate-600/50 text-gray-200',
   };
 
-  const renderNutritionItem = (item, index) => {
-    if (item.type === 'header') {
-      const HeaderTag = `h${Math.min(item.level + 2, 6)}`;
-      return (
-        <div key={index} className="mb-4">
-          <HeaderTag className="text-xl font-bold text-white border-b border-slate-600 pb-2">
-            {item.content}
-          </HeaderTag>
-        </div>
-      );
-    }
+  const getCategory = (label = '') => {
+    const l = label.toLowerCase();
+    if (l.includes('calorie') || l.includes('kcal')) return 'calories';
+    if (l.includes('protein')) return 'protein';
+    if (l.includes('carb')) return 'carbs';
+    if (l.includes('fat') || l.includes('lipid')) return 'fat';
+    if (l.includes('fiber') || l.includes('fibre')) return 'fiber';
+    if (l.includes('sugar')) return 'sugar';
+    if (l.includes('sodium') || l.includes('salt')) return 'sodium';
+    if (l.includes('vitamin') || l.includes('mineral') || l.includes('omega')) return 'vitamin';
+    return 'normal';
+  };
 
-    const categoryStyles = {
-      calories: 'bg-red-900/30 border-red-500/30 text-red-200',
-      protein: 'bg-blue-900/30 border-blue-500/30 text-blue-200',
-      carbs: 'bg-yellow-900/30 border-yellow-500/30 text-yellow-200',
-      fat: 'bg-purple-900/30 border-purple-500/30 text-purple-200',
-      fiber: 'bg-green-900/30 border-green-500/30 text-green-200',
-      sugar: 'bg-orange-900/30 border-orange-500/30 text-orange-200',
-      sodium: 'bg-pink-900/30 border-pink-500/30 text-pink-200',
-      vitamin: 'bg-teal-900/30 border-teal-500/30 text-teal-200',
-      normal: 'bg-slate-700/30 border-slate-500/30 text-gray-300',
+  // Convert **bold** / *italic* markdown that survives inside a line
+  // (Gemini mixes literal <strong> tags with markdown asterisks) into HTML.
+  const inlineFormat = (text) =>
+    text
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  const parseNutritionReport = (raw) => {
+    if (!raw) return [];
+    const lines = raw.split('\n');
+    const blocks = [];
+    let currentList = null;
+
+    const flushList = () => {
+      if (currentList) {
+        blocks.push(currentList);
+        currentList = null;
+      }
     };
 
-    const style = categoryStyles[item.category] || categoryStyles.normal;
+    lines.forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return;
 
-    return (
-      <div key={index} className={`border rounded-lg p-3 mb-2 ${style}`}>
-        <p className="font-medium leading-relaxed" dangerouslySetInnerHTML={{ __html: item.content }} />
-      </div>
-    );
+      // Section divider
+      if (/^-{3,}$/.test(line)) {
+        flushList();
+        blocks.push({ type: 'divider' });
+        return;
+      }
+
+      // Section header: a line that is ONLY a <strong> tag
+      const headerMatch = line.match(/^<strong>(.+)<\/strong>$/);
+      if (headerMatch) {
+        flushList();
+        blocks.push({ type: 'header', content: headerMatch[1] });
+        return;
+      }
+
+      // Verdict callout
+      if (/^\**Verdict:?\**/i.test(line)) {
+        flushList();
+        blocks.push({ type: 'verdict', content: line.replace(/^\**Verdict:?\**\s*/i, '') });
+        return;
+      }
+
+      // Italic disclaimer/note line, e.g. "*Note: values are approximate*"
+      const noteMatch = line.match(/^\*(Note:.*)\*$/i);
+      if (noteMatch) {
+        flushList();
+        blocks.push({ type: 'note', content: noteMatch[1] });
+        return;
+      }
+
+      // Numbered ("1. Label: rest") or bulleted ("* Label: rest") list items
+      const numberedMatch = line.match(/^\d+\.\s+(.*)$/);
+      const bulletMatch = line.match(/^\*\s+(.*)$/);
+      if (numberedMatch || bulletMatch) {
+        const itemRaw = (numberedMatch || bulletMatch)[1];
+
+        // Sub-item form: "*Label:* rest" (used for fiber/sugar/sat-fat rows)
+        const subLabelMatch = itemRaw.match(/^\*(.+?):\*\s*(.*)$/);
+        // Plain form: "Label: rest" or "**Label:** rest"
+        const plainLabelMatch = itemRaw.match(/^\*{0,2}(.+?):\*{0,2}\s*(.*)$/);
+
+        let label = null;
+        let value = itemRaw;
+        let sub = false;
+
+        if (subLabelMatch) {
+          label = subLabelMatch[1];
+          value = subLabelMatch[2];
+          sub = true;
+        } else if (plainLabelMatch && plainLabelMatch[2]) {
+          label = plainLabelMatch[1];
+          value = plainLabelMatch[2];
+        }
+
+        const item = { label, value, raw: itemRaw, sub };
+        if (!currentList) currentList = { type: 'list', items: [] };
+        currentList.items.push(item);
+        return;
+      }
+
+      // Plain paragraph (e.g. the intro sentence before the first divider)
+      flushList();
+      blocks.push({ type: 'paragraph', content: line });
+    });
+
+    flushList();
+    return blocks;
+  };
+
+  const renderBlock = (block, index) => {
+    switch (block.type) {
+      case 'divider':
+        return <hr key={index} className="border-slate-700 my-5" />;
+
+      case 'header':
+        return (
+          <div key={index} className="flex items-center space-x-2 mb-3 mt-1">
+            <div className="w-1.5 h-5 bg-red-500 rounded-full" />
+            <h4
+              className="text-lg font-bold text-white tracking-wide"
+              dangerouslySetInnerHTML={{ __html: inlineFormat(block.content) }}
+            />
+          </div>
+        );
+
+      case 'paragraph':
+        return (
+          <p
+            key={index}
+            className="text-gray-300 leading-relaxed mb-4"
+            dangerouslySetInnerHTML={{ __html: inlineFormat(block.content) }}
+          />
+        );
+
+      case 'note':
+        return (
+          <p key={index} className="text-xs text-gray-500 italic mb-4">
+            {block.content}
+          </p>
+        );
+
+      case 'verdict':
+        return (
+          <div
+            key={index}
+            className="bg-gradient-to-r from-red-900/40 to-red-800/20 border border-red-500/40 rounded-xl p-4 mt-4 flex items-start space-x-3"
+          >
+            <Award className="h-6 w-6 text-red-300 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-red-200 mb-1">Verdict</p>
+              <p
+                className="text-gray-200 leading-relaxed"
+                dangerouslySetInnerHTML={{ __html: inlineFormat(block.content) }}
+              />
+            </div>
+          </div>
+        );
+
+      case 'list':
+        return (
+          <ul key={index} className="space-y-2 mb-4">
+            {block.items.map((item, i) => {
+              if (item.label) {
+                const category = getCategory(item.label);
+                const style = CATEGORY_STYLES[category];
+                return (
+                  <li
+                    key={i}
+                    className={`flex items-baseline justify-between gap-3 border rounded-lg px-3 py-2 ${style} ${
+                      item.sub ? 'ml-6 py-1.5 opacity-80 text-sm' : ''
+                    }`}
+                  >
+                    <span
+                      className="font-medium"
+                      dangerouslySetInnerHTML={{ __html: inlineFormat(item.label) }}
+                    />
+                    <span
+                      className="text-right"
+                      dangerouslySetInnerHTML={{ __html: inlineFormat(item.value) }}
+                    />
+                  </li>
+                );
+              }
+              return (
+                <li key={i} className="flex items-start space-x-2 text-gray-300">
+                  <span className="text-red-400 mt-1.5 text-xs">●</span>
+                  <span
+                    className="leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: inlineFormat(item.raw) }}
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        );
+
+      default:
+        return null;
+    }
   };
 
   return (
@@ -511,14 +660,12 @@ const CalorieCounter = () => {
                 <div className="bg-slate-800 border border-slate-600 rounded-2xl overflow-hidden">
                   <div className="bg-gradient-to-r from-red-600 to-red-700 p-6">
                     <div className="flex items-center space-x-3">
-                      <Info className="h-6 w-6 text-white" />
+                      <Utensils className="h-6 w-6 text-white" />
                       <h3 className="text-2xl font-bold text-white">Nutritional Analysis</h3>
                     </div>
                   </div>
-                  <div className="p-6 max-h-96 overflow-y-auto custom-scrollbar">
-                    <div className="prose prose-invert max-w-none">
-                      {parseNutritionData(nutritionData)?.map((item, index) => renderNutritionItem(item, index))}
-                    </div>
+                  <div className="p-6 max-h-[32rem] overflow-y-auto custom-scrollbar">
+                    {parseNutritionReport(nutritionData).map((block, index) => renderBlock(block, index))}
                   </div>
                 </div>
               )}
